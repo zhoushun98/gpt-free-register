@@ -35,6 +35,8 @@ from config import codex as _cfg
 from core.session import BrowserSession
 from core.openai_auth import (
     _is_transient_network_error,
+    _extract_error_code,
+    AccountUnusableError,
     request_sentinel_token,
     build_sentinel_header,
 )
@@ -251,6 +253,12 @@ def _submit_email_otp(session: BrowserSession, code: str) -> None:
         sentinel_header=sentinel_header,
     )
     if resp.status_code != 200:
+        error_code = _extract_error_code(resp)
+        if error_code in ("account_deactivated", "account_deleted", "account_banned"):
+            raise AccountUnusableError(
+                f"[Codex] 账号已废（{error_code}）status={resp.status_code}: {(resp.text or '')[:200]}",
+                error_code=error_code,
+            )
         raise RuntimeError(
             f"[Codex] 邮箱 OTP 验证失败 status={resp.status_code}: {(resp.text or '')[:300]}"
         )
@@ -633,6 +641,13 @@ def run_codex_oauth(email: str, otp_provider=None, proxy: str | None = None) -> 
             file_path=str(path),
             callback_url=callback_url,
             message=f"plan={id_claims.get('plan_type') or 'unknown'}",
+        )
+    except AccountUnusableError as exc:
+        logger.warning(f"[Codex] 账号已废（{exc.error_code}）：{email}")
+        return _codex_result(
+            status="deactivated",
+            email=email,
+            message=f"账号已废（{exc.error_code}）",
         )
     except Exception as exc:
         logger.warning(f"[Codex] 失败：{email}，{type(exc).__name__}: {str(exc)[:200]}")

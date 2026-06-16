@@ -535,6 +535,8 @@ def insert_account(
     proxy_used: str | None = None,
     email_source: str | None = None,
     extra: dict | None = None,
+    codex_status: str | None = None,   # success / failed / skipped / missing
+    codex_error: str | None = None,    # 失败原因（仅 codex_status=failed 时有意义）
 ) -> int:
     """插入或更新注册成功账号，返回本地文件中的 id。"""
     with _LOCK:
@@ -567,6 +569,8 @@ def insert_account(
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
             "email_source": email_source if email_source is not None else row.get("email_source"),
             "extra_json": extra_json if extra_json is not None else row.get("extra_json"),
+            "codex_status": codex_status if codex_status is not None else row.get("codex_status"),
+            "codex_error": codex_error if codex_error is not None else row.get("codex_error"),
             "updated_at": _now(),
         })
 
@@ -587,6 +591,23 @@ def insert_account(
         _save_accounts(accounts)
         _save_outlook(outlook_rows)
         return row_id
+
+
+def update_account_codex_status(email: str, codex_status: str, codex_error: str | None = None) -> bool:
+    """
+    单独更新某账号的 codex_status / codex_error（手动补跑 Codex 时用）。
+    返回是否找到该账号。
+    """
+    with _LOCK:
+        accounts = _load_accounts()
+        row = _find_by_email(accounts, email)
+        if row is None:
+            return False
+        row["codex_status"] = codex_status
+        row["codex_error"] = codex_error
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
 
 
 def list_accounts(limit: int = 500, offset: int = 0) -> list[dict]:

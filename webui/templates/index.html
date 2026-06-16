@@ -80,7 +80,7 @@
     .muted { color: var(--muted); }
     .pill { display: inline-flex; min-width: 48px; justify-content: center; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
     .status-available, .status-pending { color: var(--blue); background: #eef4ff; }
-    .status-used { color: #475467; background: #f2f4f7; }
+    .status-used, .status-cancelled { color: #475467; background: #f2f4f7; }
     .status-failed { color: var(--red); background: #fff0ef; }
     .status-running { color: var(--amber); background: #fff7e6; }
     .status-success { color: var(--green); background: #e9f7ef; }
@@ -103,6 +103,22 @@
       opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity .18s ease, transform .18s ease;
     }
     #toast.show { opacity: 1; transform: translateY(0); }
+    /* 分页条 */
+    .pager-bar {
+      display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+      border-top: 1px solid var(--line); font-size: 13px; flex-wrap: wrap;
+    }
+    .pager-bar button {
+      min-height: 30px; border: 1px solid var(--line); border-radius: 6px;
+      background: #fff; padding: 0 12px; cursor: pointer; font-size: 12px; font-weight: 700;
+    }
+    .pager-bar button:disabled { color: #98a2b3; cursor: not-allowed; background: #f2f4f7; }
+    .pager-bar button:not(:disabled):hover { background: var(--soft); }
+    .pager-bar .pager-info { color: var(--muted); font-size: 12px; flex: 1; text-align: center; }
+    .pager-bar select {
+      min-height: 30px; width: auto; border: 1px solid var(--line); border-radius: 6px;
+      padding: 4px 8px; font: inherit; font-size: 12px; margin-top: 0;
+    }
   </style>
 </head>
 <body>
@@ -155,7 +171,10 @@
     <section class="card">
       <div class="toolbar">
         <div><h2>任务列表</h2></div>
-        <div class="buttons"><button class="btn" id="btnRefreshJobs">手动刷新</button></div>
+        <div class="buttons">
+          <button class="btn" id="btnCancelPending" title="把所有 status=排队 的任务标记为已取消，不再执行（已运行中的不影响）">取消所有排队</button>
+          <button class="btn" id="btnRefreshJobs">手动刷新</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table>
@@ -163,6 +182,7 @@
           <tbody id="jobsBody"></tbody>
         </table>
       </div>
+      <div class="pager-bar" id="pager-jobs"></div>
       <div class="body hidden" id="logPanel">
         <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
         <div class="log" id="logContent">加载中…</div>
@@ -182,9 +202,16 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ID</th><th>邮箱</th><th>来源</th><th>Token</th><th>2FA</th><th>创建时间</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>邮箱</th><th>来源</th><th>Token</th><th>2FA</th><th>Codex</th><th>创建时间</th><th>操作</th></tr></thead>
           <tbody id="accountsBody"></tbody>
         </table>
+      </div>
+      <div class="pager-bar" id="pager-accounts"></div>
+      <div class="body hidden" id="retryLogPanel">
+        <h3>补跑日志：<span id="retryLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+          <button class="btn" id="btnCloseRetryLog" style="float:right;min-height:28px;">关闭</button>
+        </h3>
+        <div class="log" id="retryLogContent">加载中…</div>
       </div>
     </section>
   </div>
@@ -219,13 +246,21 @@
       </div>
       <div class="toolbar" style="padding-top:10px;padding-bottom:10px;">
         <div class="search"><input id="qCodex" placeholder="搜索邮箱、plan、account_id…"></div>
+        <div class="buttons">
+          <span class="muted" id="codexSelectedHint" style="font-size:12px;align-self:center;margin-right:4px;">已选 0</span>
+          <button class="btn primary" id="btnCodexDownloadBulk" disabled title="把选中的多个凭证打包成一个 JSON 文件下载（备份/迁移用，CPA 不能直接读，需先解包）">批量下载选中</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>邮箱</th><th>Plan</th><th>状态</th><th>Account ID</th><th>更新时间</th><th>过期时间</th><th>操作</th></tr></thead>
+          <thead><tr>
+            <th style="width:32px;"><input type="checkbox" id="codexSelectAll" title="全选/取消全选当前页"></th>
+            <th>邮箱</th><th>Plan</th><th>状态</th><th>Account ID</th><th>更新时间</th><th>过期时间</th><th>操作</th>
+          </tr></thead>
           <tbody id="codexBody"></tbody>
         </table>
       </div>
+      <div class="pager-bar" id="pager-codex"></div>
     </section>
   </div>
 
@@ -252,6 +287,7 @@
           <tbody id="outlookBody"></tbody>
         </table>
       </div>
+      <div class="pager-bar" id="pager-outlook"></div>
     </section>
   </div>
 
@@ -276,7 +312,44 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 let copySeq = 0;
 const copyStore = new Map();
 let ACCOUNTS = [], OUTLOOK = [], CONFIG = [];
+let JOBS = [];
 let activeLogJob = null, logTimer = null, jobsTimer = null;
+
+// ---------- 分页状态 ----------
+const PAGERS = {
+  jobs:     { page: 1, size: 20 },
+  accounts: { page: 1, size: 20 },
+  outlook:  { page: 1, size: 20 },
+  codex:    { page: 1, size: 20 },
+};
+
+function _renderPager(id, total) {
+  const p = PAGERS[id];
+  const totalPages = Math.max(1, Math.ceil(total / p.size));
+  if (p.page > totalPages) p.page = Math.max(1, totalPages);
+  const start = total > 0 ? (p.page - 1) * p.size + 1 : 0;
+  const end = Math.min(p.page * p.size, total);
+  const el = document.getElementById('pager-' + id);
+  if (!el) return;
+  const sizes = [20, 50, 100];
+  el.innerHTML = `
+    <button onclick="pagerGo('${id}',-1)"${p.page <= 1 ? ' disabled' : ''}>← 上一页</button>
+    <span class="pager-info">${total > 0 ? `第 ${start}–${end} 条 / 共 ${total} 条（第 ${p.page} / ${totalPages} 页）` : '无数据'}</span>
+    <button onclick="pagerGo('${id}',1)"${p.page >= totalPages ? ' disabled' : ''}>下一页 →</button>
+    <select onchange="pagerSetSize('${id}',this.value)">${sizes.map(s =>
+      `<option value="${s}"${p.size === s ? ' selected' : ''}>${s} 条/页</option>`
+    ).join('')}</select>`;
+}
+
+function pagerGo(id, dir) {
+  PAGERS[id].page = Math.max(1, PAGERS[id].page + dir);
+  ({ jobs: renderJobs, accounts: renderAccounts, outlook: renderOutlook, codex: renderCodex })[id]?.();
+}
+function pagerSetSize(id, val) {
+  PAGERS[id].size = parseInt(val, 10) || 20;
+  PAGERS[id].page = 1;
+  ({ jobs: renderJobs, accounts: renderAccounts, outlook: renderOutlook, codex: renderCodex })[id]?.();
+}
 
 // ---------- 工具 ----------
 function fmt(v) { return v == null || v === '' ? '-' : String(v); }
@@ -285,7 +358,7 @@ function short(v, n=40) { const s = v || ''; return s.length > n ? s.slice(0,n)+
 function copyId(v) { if (!v) return ''; const id = 'c'+(++copySeq); copyStore.set(id, v); return id; }
 function cbtn(label, value, cls='') { const id = copyId(value); return `<button class="${cls}" data-copy-id="${id}" ${id?'':'disabled'}>${label}</button>`; }
 function pill(status) {
-  const map = { available:'可用', used:'已用', failed:'失败', pending:'排队', running:'运行中', success:'成功' };
+  const map = { available:'可用', used:'已用', failed:'失败', pending:'排队', running:'运行中', success:'成功', cancelled:'已取消' };
   return `<span class="pill status-${esc(status)}">${esc(map[status]||status||'-')}</span>`;
 }
 function showToast(t) { const el=$('#toast'); el.textContent=t; el.classList.add('show'); clearTimeout(showToast.t); showToast.t=setTimeout(()=>el.classList.remove('show'),1400); }
@@ -333,29 +406,59 @@ async function loadSummary() {
 $('#btnStart').addEventListener('click', async () => {
   const count = parseInt($('#regCount').value || '1', 10);
   const workers = parseInt($('#regWorkers').value || '3', 10);
+  const active = JOBS.filter(j => j.status === 'pending' || j.status === 'running');
+  if (active.length > 0) {
+    const ok = confirm(
+      `当前任务表里已有 ${active.length} 个任务在跑或排队，` +
+      `这次会再加 ${count} 个，合计 ${active.length + count} 个，确定继续？\n\n` +
+      `（如果只是想跑这 ${count} 个，建议先点"取消所有排队"清掉残留再提交）`
+    );
+    if (!ok) return;
+  }
   $('#btnStart').disabled = true;
+  const restoreBtn = () => { $('#btnStart').disabled = false; };
   try {
     const r = await api('/api/jobs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({count, workers}) });
     $('#regWarn').innerHTML = r.warning ? `<div class="banner warn">${esc(r.warning)}</div>` : `<div class="banner info">已提交 ${r.submitted} 个任务</div>`;
     refreshJobs();
   } catch(e) { $('#regWarn').innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
-  finally { $('#btnStart').disabled = false; }
+  finally { setTimeout(restoreBtn, 3000); }
 });
 $('#btnRefreshJobs').addEventListener('click', refreshJobs);
+$('#btnCancelPending').addEventListener('click', async () => {
+  const pendingCount = JOBS.filter(j => j.status === 'pending').length;
+  if (pendingCount === 0) { showToast('当前没有排队任务'); return; }
+  if (!confirm(`确定取消 ${pendingCount} 个排队中的任务吗？已运行中的任务不受影响。`)) return;
+  $('#btnCancelPending').disabled = true;
+  try {
+    const r = await api('/api/jobs/cancel-pending', { method:'POST', headers:{'Content-Type':'application/json'}, body: '{}' });
+    showToast(`已取消 ${r.cancelled} 个排队任务`);
+    refreshJobs();
+  } catch(e) { showToast('取消失败: ' + e.message); }
+  finally { $('#btnCancelPending').disabled = false; }
+});
+
+function renderJobs() {
+  const p = PAGERS.jobs;
+  const total = JOBS.length;
+  const rows = JOBS.slice((p.page - 1) * p.size, p.page * p.size);
+  $('#jobsBody').innerHTML = rows.map(j => `
+    <tr>
+      <td class="muted">#${esc(j.id)}</td>
+      <td>${pill(j.status)}</td>
+      <td>${esc(j.email || '-')}</td>
+      <td class="muted">${esc(j.started_at || '-')}</td>
+      <td class="muted">${esc(j.completed_at || '-')}</td>
+      <td class="muted">${esc(short(j.error_message || '', 40))}</td>
+      <td class="actions"><button data-log-job="${esc(j.id)}">日志</button></td>
+    </tr>`).join('') || '<tr><td colspan="7" class="muted">暂无任务</td></tr>';
+  _renderPager('jobs', total);
+}
 
 async function refreshJobs() {
   try {
-    const jobs = await api('/api/jobs?limit=100');
-    $('#jobsBody').innerHTML = jobs.map(j => `
-      <tr>
-        <td class="muted">#${esc(j.id)}</td>
-        <td>${pill(j.status)}</td>
-        <td>${esc(j.email || '-')}</td>
-        <td class="muted">${esc(j.started_at || '-')}</td>
-        <td class="muted">${esc(j.completed_at || '-')}</td>
-        <td class="muted">${esc(short(j.error_message || '', 40))}</td>
-        <td class="actions"><button data-log-job="${esc(j.id)}">日志</button></td>
-      </tr>`).join('') || '<tr><td colspan="7" class="muted">暂无任务</td></tr>';
+    JOBS = await api('/api/jobs?limit=500');
+    renderJobs();
     loadSummary();
   } catch(e) {}
 }
@@ -390,11 +493,30 @@ async function pollLog() {
 
 // ---------- 账号 ----------
 async function loadAccounts() {
-  try { ACCOUNTS = await api('/api/accounts?limit=500'); renderAccounts(); } catch(e) {}
+  try { ACCOUNTS = await api('/api/accounts?limit=2000'); renderAccounts(); } catch(e) {}
+}
+function _codexCell(r) {
+  const s = r.codex_status || '';
+  const err = r.codex_error || '';
+  const titleAttr = err ? ` title="${esc(err)}"` : '';
+  if (s === 'success') return `<span class="pill status-success">成功</span>`;
+  if (s === 'retrying') return `<span class="pill status-running">补跑中</span>`;
+  if (s === 'failed') return `<span class="pill status-failed"${titleAttr}>失败</span>`;
+  if (s === 'skipped') return `<span class="pill status-used">已跳过</span>`;
+  if (s === 'deactivated') return `<span class="pill status-failed" title="账号已被 OpenAI 删除/停用/封禁，无法授权">已废号</span>`;
+  return `<span class="muted">-</span>`;
+}
+function _codexAction(r) {
+  const s = r.codex_status || '';
+  if (s === 'success' || s === 'retrying' || s === 'deactivated') return '';
+  return `<button data-codex-retry="${esc(r.email)}" title="重新跑一次 Codex 授权（会消耗 1 封邮箱 OTP + 1 个接码短信）">补跑 Codex</button>`;
 }
 function renderAccounts() {
   const q = $('#qAccounts').value.trim().toLowerCase();
-  const rows = ACCOUNTS.filter(r => !q || Object.values(r).join('\n').toLowerCase().includes(q));
+  const filtered = ACCOUNTS.filter(r => !q || Object.values(r).join('\n').toLowerCase().includes(q));
+  const p = PAGERS.accounts;
+  const total = filtered.length;
+  const rows = filtered.slice((p.page - 1) * p.size, p.page * p.size);
   $('#accountsBody').innerHTML = rows.map(r => `
     <tr>
       <td class="muted">#${esc(r.id)}</td>
@@ -402,21 +524,81 @@ function renderAccounts() {
       <td>${esc(r.email_source || '-')}</td>
       <td><span class="mono">${esc(short(r.access_token || '', 42))}</span></td>
       <td>${r.totp_secret ? '已启用' : '<span class="muted">未启用</span>'}</td>
+      <td>${_codexCell(r)}</td>
       <td class="muted">${esc(r.created_at || '-')}</td>
-      <td class="actions">${cbtn('复制Token', r.access_token, 'primary')} ${cbtn('复制整行', r.copy_line, 'good')}</td>
-    </tr>`).join('') || '<tr><td colspan="7" class="muted">暂无账号</td></tr>';
+      <td class="actions">${cbtn('复制Token', r.access_token, 'primary')} ${cbtn('复制整行', r.copy_line, 'good')} ${_codexAction(r)}</td>
+    </tr>`).join('') || '<tr><td colspan="8" class="muted">暂无账号</td></tr>';
+  _renderPager('accounts', total);
 }
-$('#qAccounts').addEventListener('input', renderAccounts);
+
+// ---------- 补跑日志面板 ----------
+let retryLogEmail = null, retryLogTimer = null;
+
+function openRetryLog(email) {
+  retryLogEmail = email;
+  $('#retryLogEmail').textContent = email;
+  $('#retryLogPanel').classList.remove('hidden');
+  $('#retryLogContent').textContent = '加载中…';
+  pollRetryLog();
+  clearInterval(retryLogTimer);
+  retryLogTimer = setInterval(pollRetryLog, 2000);
+}
+async function pollRetryLog() {
+  if (!retryLogEmail) return;
+  try {
+    const r = await api(`/api/codex/retry-log?email=${encodeURIComponent(retryLogEmail)}`);
+    const c = $('#retryLogContent');
+    const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
+    c.textContent = r.log || '(暂无日志，等待任务写入…)';
+    if (atBottom) c.scrollTop = c.scrollHeight;
+    if (!r.running) {
+      clearInterval(retryLogTimer);
+      loadAccounts();
+    }
+  } catch(e) {}
+}
+$('#btnCloseRetryLog').addEventListener('click', () => {
+  retryLogEmail = null;
+  clearInterval(retryLogTimer);
+  $('#retryLogPanel').classList.add('hidden');
+});
+
+// 补跑 Codex 按钮（事件委托）
+$('#accountsBody').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-codex-retry]');
+  if (!btn) return;
+  const email = btn.dataset.codexRetry;
+  if (!confirm(`重新跑 Codex 授权？\n\n${email}\n\n将消耗：\n  • 1 封邮箱 OTP（自动收）\n  • 1 个接码短信（约 $0.13）\n\n补跑会在后台进行（~1-2 分钟），完成后状态自动更新。`)) return;
+  btn.disabled = true;
+  try {
+    const r = await api('/api/codex/retry', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email}) });
+    showToast(r.message || '已开始补跑');
+    loadAccounts();
+    openRetryLog(email);
+    const poll = setInterval(async () => {
+      const acc = ACCOUNTS.find(a => a.email === email);
+      if (!acc || acc.codex_status !== 'retrying') clearInterval(poll);
+    }, 5000);
+    setTimeout(() => clearInterval(poll), 5 * 60 * 1000);
+  } catch(err) {
+    showToast('触发补跑失败: ' + err.message);
+    btn.disabled = false;
+  }
+});
+$('#qAccounts').addEventListener('input', () => { PAGERS.accounts.page = 1; renderAccounts(); });
 $('#copyAllTokens').addEventListener('click', () => copyText(ACCOUNTS.map(r=>r.access_token).filter(Boolean).join('\n')));
 $('#copyAllLines').addEventListener('click', () => copyText(ACCOUNTS.map(r=>r.copy_line).filter(Boolean).join('\n')));
 
 // ---------- 邮箱池 ----------
 async function loadOutlook() {
-  try { OUTLOOK = await api('/api/outlook?limit=500'); renderOutlook(); } catch(e) {}
+  try { OUTLOOK = await api('/api/outlook?limit=2000'); renderOutlook(); } catch(e) {}
 }
 function renderOutlook() {
   const q = $('#qOutlook').value.trim().toLowerCase();
-  const rows = OUTLOOK.filter(r => !q || Object.values(r).join('\n').toLowerCase().includes(q));
+  const filtered = OUTLOOK.filter(r => !q || Object.values(r).join('\n').toLowerCase().includes(q));
+  const p = PAGERS.outlook;
+  const total = filtered.length;
+  const rows = filtered.slice((p.page - 1) * p.size, p.page * p.size);
   $('#outlookBody').innerHTML = rows.map(r => `
     <tr>
       <td><div class="main-cell">${esc(r.email)}</div><div class="sub-cell mono">${esc(short(r.copy_line, 70))}</div></td>
@@ -431,8 +613,9 @@ function renderOutlook() {
         <button data-pool-act="delete" data-email="${esc(r.email)}" style="border-color:#e7a3a0;color:#b3261e;">删除</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">邮箱池为空</td></tr>';
+  _renderPager('outlook', total);
 }
-$('#qOutlook').addEventListener('input', renderOutlook);
+$('#qOutlook').addEventListener('input', () => { PAGERS.outlook.page = 1; renderOutlook(); });
 $('#copyAllEmails').addEventListener('click', () => copyText(OUTLOOK.map(r=>r.copy_line).filter(Boolean).join('\n')));
 $('#outlookBody').addEventListener('click', async (e) => {
   const t = e.target.closest('[data-pool-act]');
@@ -475,16 +658,26 @@ async function loadCodex() {
     renderCodex();
   } catch(e) { showToast('加载 Codex 列表失败: ' + e.message); }
 }
+const CODEX_SELECTED = new Set();
+function _codexUpdateSelectedHint() {
+  $('#codexSelectedHint').textContent = `已选 ${CODEX_SELECTED.size}`;
+  $('#btnCodexDownloadBulk').disabled = CODEX_SELECTED.size === 0;
+}
 function renderCodex() {
   const q = $('#qCodex').value.trim().toLowerCase();
-  const rows = CODEX.filter(r => !q || Object.values(r).join('\n').toLowerCase().includes(q));
+  const filtered = CODEX.filter(r => !q || Object.values(r).join('\n').toLowerCase().includes(q));
+  const p = PAGERS.codex;
+  const total = filtered.length;
+  const rows = filtered.slice((p.page - 1) * p.size, p.page * p.size);
   $('#codexBody').innerHTML = rows.map(r => {
     const exported = (r.exported_count || 0) > 0;
     const statusBadge = exported
       ? `<span class="pill status-used" title="导出 ${esc(r.exported_count)} 次，最近 ${esc(r.exported_at || '-')}">已导出</span>`
       : `<span class="pill status-available">未导出</span>`;
+    const checked = CODEX_SELECTED.has(r.filename) ? 'checked' : '';
     return `
     <tr>
+      <td><input type="checkbox" class="codex-row-check" data-fname="${esc(r.filename)}" ${checked}></td>
       <td><div class="main-cell">${esc(r.email || '-')}</div><div class="sub-cell mono">${esc(r.filename)}</div></td>
       <td>${esc(r.plan || '-')}</td>
       <td>${statusBadge}</td>
@@ -496,17 +689,88 @@ function renderCodex() {
         ${exported ? `<button data-codex-reset="${esc(r.filename)}" title="重新标记为未导出">重置标记</button>` : ''}
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="7" class="muted">还没有 Codex 凭证。注册成功并跑通 Codex 授权后会自动出现。</td></tr>';
+  }).join('') || '<tr><td colspan="8" class="muted">还没有 Codex 凭证。注册成功并跑通 Codex 授权后会自动出现。</td></tr>';
+  // 全选 checkbox：仅反映当前页状态
+  const pageFilenames = rows.map(r => r.filename);
+  const allChecked = pageFilenames.length > 0 && pageFilenames.every(f => CODEX_SELECTED.has(f));
+  $('#codexSelectAll').checked = allChecked;
+  $('#codexSelectAll').indeterminate = !allChecked && pageFilenames.some(f => CODEX_SELECTED.has(f));
+  _codexUpdateSelectedHint();
+  _renderPager('codex', total);
 }
-$('#qCodex').addEventListener('input', renderCodex);
+$('#qCodex').addEventListener('input', () => { PAGERS.codex.page = 1; renderCodex(); });
 $('#btnRefreshCodex').addEventListener('click', loadCodex);
+
+// 全选 / 取消全选（仅当前页可见行）
+$('#codexSelectAll').addEventListener('change', (e) => {
+  const q = $('#qCodex').value.trim().toLowerCase();
+  const filtered = CODEX.filter(r => !q || Object.values(r).join('\n').toLowerCase().includes(q));
+  const p = PAGERS.codex;
+  const pageRows = filtered.slice((p.page - 1) * p.size, p.page * p.size);
+  if (e.target.checked) pageRows.forEach(r => CODEX_SELECTED.add(r.filename));
+  else pageRows.forEach(r => CODEX_SELECTED.delete(r.filename));
+  renderCodex();
+});
+
+// 行 checkbox 变化（事件委托）
+$('#codexBody').addEventListener('change', (e) => {
+  const cb = e.target.closest('.codex-row-check');
+  if (!cb) return;
+  if (cb.checked) CODEX_SELECTED.add(cb.dataset.fname);
+  else CODEX_SELECTED.delete(cb.dataset.fname);
+  _codexUpdateSelectedHint();
+  const q = $('#qCodex').value.trim().toLowerCase();
+  const filtered = CODEX.filter(r => !q || Object.values(r).join('\n').toLowerCase().includes(q));
+  const p = PAGERS.codex;
+  const pageFilenames = filtered.slice((p.page - 1) * p.size, p.page * p.size).map(r => r.filename);
+  const allChecked = pageFilenames.length > 0 && pageFilenames.every(f => CODEX_SELECTED.has(f));
+  $('#codexSelectAll').checked = allChecked;
+  $('#codexSelectAll').indeterminate = !allChecked && pageFilenames.some(f => CODEX_SELECTED.has(f));
+});
+
+// 批量下载
+$('#btnCodexDownloadBulk').addEventListener('click', async () => {
+  if (CODEX_SELECTED.size === 0) return;
+  const filenames = Array.from(CODEX_SELECTED);
+  const note = `选中 ${filenames.length} 个凭证，打包到一个 JSON 文件下载。\n\n` +
+               `⚠ 这个聚合格式 CPA 不能直接读，主要用于备份/迁移。\n` +
+               `要给 CPA 用请用每行的"下载 JSON"单个下载。\n\n继续？`;
+  if (!confirm(note)) return;
+  $('#btnCodexDownloadBulk').disabled = true;
+  try {
+    const resp = await fetch('/api/codex/download-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filenames }),
+    });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({}));
+      throw new Error(e.error || ('HTTP ' + resp.status));
+    }
+    const cd = resp.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const dlname = m ? m[1] : `codex-bulk-${Date.now()}.json`;
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = dlname;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
+    showToast(`已打包下载 ${filenames.length} 个`);
+    CODEX_SELECTED.clear();
+    setTimeout(loadCodex, 600);
+  } catch(err) {
+    showToast('批量下载失败: ' + err.message);
+  } finally {
+    $('#btnCodexDownloadBulk').disabled = CODEX_SELECTED.size === 0;
+  }
+});
+
 $('#codexBody').addEventListener('click', async (e) => {
   const dl = e.target.closest('[data-codex-download]');
   if (dl) {
     const fname = dl.dataset.codexDownload;
-    // 浏览器原生下载，触发后会自动 mark exported
     window.location.href = `/api/codex/download/${encodeURIComponent(fname)}`;
-    // 给后端一点时间标记，然后刷新列表
     setTimeout(loadCodex, 800);
     return;
   }

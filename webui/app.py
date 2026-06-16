@@ -11,6 +11,7 @@ Flask 本地控制台。
 默认绑定 127.0.0.1，仅本地访问。
 """
 import logging
+from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -19,6 +20,16 @@ from core import registration_service as svc
 from webui import config_editor
 
 logger = logging.getLogger(__name__)
+
+# 正在补跑 Codex 的邮箱集合（进程内防重复触发）
+_codex_retrying: set[str] = set()
+
+_LOG_DIR = Path(__file__).resolve().parent.parent / "注册日志"
+
+
+def _codex_retry_log_path(email: str) -> Path:
+    safe = email.replace("/", "_").replace("\\", "_").replace(":", "_")
+    return _LOG_DIR / f"codex-retry-{safe}.log"
 
 
 def create_app() -> Flask:
@@ -139,6 +150,63 @@ def create_app() -> Flask:
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
 
+    @app.post("/api/codex/download-bulk")
+    def api_codex_download_bulk():
+        """
+        批量下载选中的 codex 凭证，打包到一个 JSON 文件里。
+
+        Body: {"filenames": ["codex-xxx.json", ...]}
+        响应：聚合 JSON（attachment 触发浏览器下载），结构：
+            {
+              "exported_at": "...",
+              "count": N,
+              "credentials": [{"filename": "...", "data": {...原始凭证内容...}}, ...],
+              "errors": [...]   // 仅当部分失败时出现
+            }
+        注意：聚合格式**不能直接被 CPA 读**，CPA 是按单文件加载 auths/ 目录的。
+              本接口主要用途是备份 / 跨机迁移 / 二次处理。
+        每个成功的凭证会自动标记 mark_exported（计数+1）。
+        """
+        import json as _json
+        from datetime import datetime as _dt
+
+        data = request.get_json(silent=True) or {}
+        filenames = data.get("filenames") or []
+        if not isinstance(filenames, list) or not filenames:
+            return jsonify({"ok": False, "error": "filenames 必须是非空数组"}), 400
+        if len(filenames) > 1000:
+            return jsonify({"ok": False, "error": "单次最多 1000 个"}), 400
+
+        bundle = []
+        errors = []
+        for fname in filenames:
+            if not isinstance(fname, str):
+                errors.append({"filename": str(fname), "error": "非字符串"})
+                continue
+            try:
+                content, real_fname = db.read_codex_credential(fname)
+                parsed = _json.loads(content)
+                bundle.append({"filename": real_fname, "data": parsed})
+                db.mark_codex_exported(real_fname)
+            except Exception as exc:
+                errors.append({"filename": fname, "error": f"{type(exc).__name__}: {exc}"})
+
+        now = _dt.now()
+        result = {
+            "exported_at": now.isoformat(timespec="seconds"),
+            "count": len(bundle),
+            "credentials": bundle,
+        }
+        if errors:
+            result["errors"] = errors
+
+        dl_name = f"codex-bulk-{now.strftime('%Y%m%d-%H%M%S')}.json"
+        return Response(
+            _json.dumps(result, ensure_ascii=False, indent=2),
+            mimetype="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{dl_name}"'},
+        )
+
     @app.post("/api/codex/reset-export")
     def api_codex_reset_export():
         """清掉某个 codex 凭证的导出状态（重新标为未导出）。body {filename}。"""
@@ -151,6 +219,100 @@ def create_app() -> Flask:
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True})
+
+    @app.post("/api/codex/retry")
+    def api_codex_retry():
+        """
+        手动补跑某账号的 Codex 授权。Body {email}。
+
+        立即返回，实际跑在后台守护线程里（要 ~1-2 分钟收邮件+接码）。
+        前端轮询 /api/accounts 看 codex_status 变化即可。
+        防重复触发：补跑过程中再次调用同邮箱会被拒。
+        """
+        import threading
+        data = request.get_json(silent=True) or {}
+        email = (data.get("email") or "").strip()
+        if not email:
+            return jsonify({"ok": False, "error": "email 为空"}), 400
+
+        # 校验账号存在
+        acc = db.get_account_by_email(email)
+        if acc is None:
+            return jsonify({"ok": False, "error": f"账号不存在: {email}"}), 404
+
+        # 防重复触发：内存级标记，进程内同邮箱并发 retry 直接拒
+        if email in _codex_retrying:
+            return jsonify({"ok": False, "error": "该账号正在补跑中，请稍候"}), 409
+        _codex_retrying.add(email)
+
+        # 立即把状态标为 retrying，前端能立刻看到
+        db.update_account_codex_status(email, "retrying", None)
+
+        log_path = _codex_retry_log_path(email)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        # 清空旧日志（每次补跑重新写）
+        log_path.write_text("", encoding="utf-8")
+
+        def _bg_retry():
+            import logging as _logging
+            from core.codex_oauth import run_codex_oauth
+
+            # 给本线程挂一个写到补跑日志文件的 handler
+            thread_name = threading.current_thread().name
+            fh = _logging.FileHandler(str(log_path), encoding="utf-8")
+            fh.setLevel(_logging.DEBUG)
+            fh.setFormatter(_logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s",
+                datefmt="%H:%M:%S",
+            ))
+            fh.addFilter(lambda r: r.threadName == thread_name)
+            _logging.getLogger().addHandler(fh)
+            try:
+                result = run_codex_oauth(email)
+                result_status = result.get("status", "failed")
+                if result.get("ok"):
+                    db.update_account_codex_status(email, "success", None)
+                    logger.info(f"[Codex 补跑] {email} 成功")
+                elif result_status == "deactivated":
+                    db.update_account_codex_status(email, "deactivated", result.get("message"))
+                    logger.warning(f"[Codex 补跑] {email} 账号已废: {result.get('message')}")
+                else:
+                    db.update_account_codex_status(
+                        email, result_status,
+                        result.get("message"),
+                    )
+                    logger.warning(f"[Codex 补跑] {email} 失败: {result.get('message')}")
+            except Exception as exc:
+                db.update_account_codex_status(email, "failed", f"{type(exc).__name__}: {exc}")
+                logger.exception(f"[Codex 补跑] {email} 异常")
+            finally:
+                fh.close()
+                _logging.getLogger().removeHandler(fh)
+                _codex_retrying.discard(email)
+
+        threading.Thread(target=_bg_retry, name=f"codex-retry-{email}", daemon=True).start()
+        return jsonify({"ok": True, "message": "已在后台开始补跑，~1-2 分钟后刷新查看"})
+
+    @app.get("/api/codex/retry-log")
+    def api_codex_retry_log():
+        """读取某邮箱最近一次补跑的日志。?email=xxx"""
+        email = (request.args.get("email") or "").strip()
+        if not email:
+            return jsonify({"ok": False, "error": "email 为空"}), 400
+        p = _codex_retry_log_path(email)
+        if not p.exists():
+            return jsonify({"ok": True, "log": "", "running": False})
+        max_bytes = 50_000
+        size = p.stat().st_size
+        with p.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            content = f.read().decode("utf-8", errors="replace")
+        return jsonify({
+            "ok": True,
+            "log": content,
+            "running": email in _codex_retrying,
+        })
 
     # ----------------------------------------------------------
     # 注册任务
@@ -186,6 +348,12 @@ def create_app() -> Flask:
         if pool.get("available", 0) < count:
             warning = f"可用邮箱仅 {pool.get('available', 0)} 个，少于任务数 {count}，不足的会失败"
         return jsonify({"ok": True, "submitted": len(jobs), "jobs": jobs, "warning": warning})
+
+    @app.post("/api/jobs/cancel-pending")
+    def api_jobs_cancel_pending():
+        """取消所有还在排队（status=pending）的任务。已在 running 的不动。"""
+        cancelled = svc.cancel_pending_jobs()
+        return jsonify({"ok": True, "cancelled": cancelled})
 
     @app.get("/api/jobs/<int:job_id>/log")
     def api_job_log(job_id: int):

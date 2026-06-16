@@ -355,9 +355,20 @@ def run_registration(
 
         logger.debug(f"[完成] TOTP Secret: {totp_secret or '(未设置)'}")
 
-        return {"success": True, "email": email, "account_id": account_id,
+        # 注册任务的成功判定：账号本身(注册+token)+Codex 授权都成功才算 success。
+        # Codex 失败时账号仍保存（token 拿到了、有补跑机会），但任务状态标失败，
+        # 让 WebUI 任务表能清楚区分"完整成功"和"差 Codex"两种结果。
+        codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
+        task_success = codex_ok
+        task_error = None
+        if not task_success:
+            task_error = f"Codex 未完成: {codex_result.get('message', '未知')}"
+            logger.warning(f"[任务结果] {email} 账号已保存但任务标失败，原因: {task_error}")
+
+        return {"success": task_success, "email": email, "account_id": account_id,
                 "access_token": access_token, "totp_secret": totp_secret,
-                "flow": flow_result, "codex": codex_result}
+                "flow": flow_result, "codex": codex_result,
+                "error": task_error}
 
     except Exception as e:
         logger.error(f"[失败] {email}: {type(e).__name__}: {e}")

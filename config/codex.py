@@ -56,19 +56,19 @@ SMS_API_BASE: str = "https://api.grizzlysms.com/stubs/handler_api.php"
 
 # 接码 API 密钥（在 GrizzlySMS 后台 → 设置 获取）
 # 留空时 Codex 授权的手机验证步会失败；如不需要 Codex 自动授权，把 ENABLE_CODEX_AUTO=False。
-SMS_API_KEY: str = "472ab4df46a4c97d61089fac760fb0d2"
+SMS_API_KEY: str = ""
 
 # 服务代码：OpenAI = "dr"
 SMS_SERVICE: str = "dr"
 
-# 国家代码：美国 = "187"（OpenAI 接受度高）
-SMS_COUNTRY: str = "151"
+# 国家代码：葡萄牙 = "117" / 美国 = "187"
+SMS_COUNTRY: str = "187"
 
 # 单个号愿意支付的最高价格（留空=不限）。透传给 getNumber 的 maxPrice。
 SMS_MAX_PRICE: str = ""
 
 # 一个号收不到短信/被拒时，换号重试的最大次数
-SMS_MAX_RETRIES: int = 3
+SMS_MAX_RETRIES: int = 10
 
 # 单个号等待短信的最长秒数（超时则取消该号换下一个）
 SMS_CODE_WAIT: int = 120

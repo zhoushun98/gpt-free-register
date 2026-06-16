@@ -117,8 +117,16 @@ class _JobLogContext:
 
 def _run_one_job(job_id: int, log_file: str) -> None:
     """单任务入口（线程池里跑这个）。"""
-    db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
     log_logger = logging.getLogger(__name__)
+
+    # 取消检查：用户可能在任务排队期间点了"取消排队"，把 status 改成了 cancelled。
+    # 因为 Future 已经 submit 进线程池无法撤回，只能在真正执行前自检一下，跳过 cancelled 的。
+    current = db.get_job(job_id)
+    if current and current.get("status") == "cancelled":
+        log_logger.info(f"[Job {job_id}] 已被用户取消，跳过执行")
+        return
+
+    db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
 
     try:
         with _JobLogContext(log_file):
@@ -137,11 +145,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 )
                 log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
             else:
+                # 注意：失败也可能伴随 account_id（如 Codex 失败但账号已注册成功）
                 err = (result or {}).get("error") if isinstance(result, dict) else "unknown"
                 db.update_job(
                     job_id,
                     status="failed",
                     email=(result or {}).get("email") if isinstance(result, dict) else None,
+                    account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
                     error=str(err)[:500],
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
@@ -182,6 +192,30 @@ def submit_registration(count: int = 1, email_source: str | None = None) -> list
         time.sleep(0.1)
     logger.info(f"[Service] 已提交 {count} 个注册任务，源={email_source}")
     return jobs
+
+
+def cancel_pending_jobs() -> int:
+    """
+    把所有 status=pending 的任务批量改成 cancelled，避免它们被执行。
+    已经在 running 的任务不动（线程池中无法中途打断）。
+    返回成功取消的数量。
+
+    实际"不执行"的保证在 _run_one_job 开头——它真要跑起来时会先看 status 决定是否跳过。
+    """
+    jobs = db.list_jobs(limit=1000)
+    cancelled = 0
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    for job in jobs:
+        if job.get("status") == "pending":
+            db.update_job(
+                int(job["id"]),
+                status="cancelled",
+                completed_at=now_iso,
+                error="用户手动取消",
+            )
+            cancelled += 1
+    logger.info(f"[Service] 已取消 {cancelled} 个排队任务")
+    return cancelled
 
 
 def read_job_log(job_id: int, max_bytes: int = 50_000) -> str:

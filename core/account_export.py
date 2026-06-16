@@ -390,6 +390,12 @@ def save_account_data(
     extra = extra or {}
     user = extra.get("user") or {}
     account = extra.get("account") or {}
+    # 从 extra.codex 抽出顶层 codex 状态/错误，方便 WebUI 直接读账号字段
+    codex = extra.get("codex") or {}
+    codex_status = codex.get("status")  # success / failed / skipped
+    codex_error = None
+    if codex_status == "failed":
+        codex_error = codex.get("message")
 
     row_id = insert_account(
         email=email,
@@ -403,6 +409,8 @@ def save_account_data(
         proxy_used=proxy_used,
         email_source=email_source,
         extra=extra,
+        codex_status=codex_status,
+        codex_error=codex_error,
     )
     batch_folder = _append_batch_archive(
         row_id=row_id,
