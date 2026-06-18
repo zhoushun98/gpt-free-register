@@ -1100,3 +1100,92 @@ def refresh_static_viewer() -> Path:
         _sync_accounts_txt(account_rows)
         _sync_tokens_txt(account_rows)
         return _render_static_viewer(outlook_rows=outlook_rows, account_rows=account_rows)
+
+
+# ============================================================
+# Domain email pool（Cloudflare 域名邮箱跟踪）
+# ============================================================
+
+_DOMAIN_EMAIL_JSON = _PROJECT_ROOT / "用于注册的域名邮箱.json"
+
+
+def _load_domain_pool() -> list[dict]:
+    rows = _read_json(_DOMAIN_EMAIL_JSON, [])
+    return rows if isinstance(rows, list) else []
+
+
+def _save_domain_pool(rows: list[dict]) -> None:
+    _write_json(_DOMAIN_EMAIL_JSON, rows)
+
+
+def _find_domain_email(rows: list[dict], email: str) -> dict | None:
+    target = (email or "").lower()
+    return next((r for r in rows if (r.get("email") or "").lower() == target), None)
+
+
+def claim_next_domain_email(email: str) -> dict:
+    """记录一个新的域名邮箱地址到池中（标记为 available）。"""
+    with _LOCK:
+        rows = _load_domain_pool()
+        if _find_domain_email(rows, email):
+            # 已存在，直接返回
+            row = _find_domain_email(rows, email)
+            return row
+        row = {
+            "id": _next_id(rows),
+            "email": email,
+            "status": "available",
+            "used_at": None,
+            "note": None,
+            "created_at": _now(),
+        }
+        rows.append(row)
+        _save_domain_pool(rows)
+        return dict(row)
+
+
+def release_domain_email(email: str, status: str = "available", note: str | None = None) -> None:
+    """更新域名邮箱状态。"""
+    with _LOCK:
+        rows = _load_domain_pool()
+        row = _find_domain_email(rows, email)
+        if row is None:
+            return
+        row["status"] = status
+        if status == "available":
+            row["used_at"] = None
+        elif status in ("used", "failed"):
+            row["used_at"] = row.get("used_at") or _now()
+        if note is not None:
+            row["note"] = note
+        _save_domain_pool(rows)
+
+
+def list_domain_email_pool(status: str | None = None, limit: int = 500) -> list[dict]:
+    with _LOCK:
+        rows = sorted(_load_domain_pool(), key=lambda x: int(x.get("id") or 0), reverse=True)
+        if status:
+            rows = [r for r in rows if r.get("status") == status]
+        return [dict(r) for r in rows[:limit]]
+
+
+def domain_email_pool_summary() -> dict:
+    with _LOCK:
+        out: dict[str, int] = {"available": 0, "used": 0, "failed": 0}
+        for row in _load_domain_pool():
+            s = row.get("status") or "available"
+            out[s] = out.get(s, 0) + 1
+        out["total"] = sum(v for k, v in out.items() if k != "total")
+        return out
+
+
+def delete_domain_email(email: str) -> bool:
+    """从域名邮箱池删除一个邮箱。"""
+    with _LOCK:
+        rows = _load_domain_pool()
+        target = (email or "").lower()
+        new_rows = [r for r in rows if (r.get("email") or "").lower() != target]
+        if len(new_rows) == len(rows):
+            return False
+        _save_domain_pool(new_rows)
+        return True

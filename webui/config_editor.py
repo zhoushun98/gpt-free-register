@@ -58,6 +58,22 @@ EDITABLE_FIELDS = [
         "key": "OTP_POLL_INTERVAL", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
         "label": "OTP 轮询间隔(秒)", "help": "每隔多少秒查一次新邮件",
     },
+    {
+        "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "邮箱来源", "help": "outlook = Outlook账号池 | cloudflare_domain = Cloudflare域名邮箱",
+    },
+    {
+        "key": "EMAIL_DOMAIN", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "Cloudflare 域名", "help": "你的 Cloudflare 域名，如 mydomain.com",
+    },
+    {
+        "key": "QQ_EMAIL", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "QQ 邮箱地址", "help": "接收 Cloudflare 转发邮件的 QQ 邮箱，如 123456@qq.com",
+    },
+    {
+        "key": "QQ_IMAP_PASSWORD", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "QQ 邮箱 IMAP 授权码", "help": "16 位授权码（QQ邮箱网页→设置→账户→POP3/IMAP/SMTP服务生成）",
+    },
     # ---- 注册默认 ----
     {
         "key": "REGISTER_BIRTHDAY", "file": "register.py", "type": "str", "group": "注册默认",

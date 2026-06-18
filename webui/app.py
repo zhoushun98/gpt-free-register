@@ -48,12 +48,17 @@ def create_app() -> Flask:
     @app.get("/api/summary")
     def api_summary():
         pool = db.outlook_pool_summary()
+        domain_pool = db.domain_email_pool_summary()
         return jsonify({
             "accounts": db.count_accounts(),
             "outlook_total": pool.get("total", 0),
             "outlook_available": pool.get("available", 0),
             "outlook_used": pool.get("used", 0),
             "outlook_failed": pool.get("failed", 0),
+            "domain_total": domain_pool.get("total", 0),
+            "domain_available": domain_pool.get("available", 0),
+            "domain_used": domain_pool.get("used", 0),
+            "domain_failed": domain_pool.get("failed", 0),
         })
 
     # ----------------------------------------------------------
@@ -121,6 +126,34 @@ def create_app() -> Flask:
         if not email:
             return jsonify({"ok": False, "error": "email 为空"}), 400
         deleted = db.delete_outlook(email)
+        return jsonify({"ok": True, "deleted": deleted})
+
+    # ----------------------------------------------------------
+    # 域名邮箱池（Cloudflare 域名邮箱模式）
+    # ----------------------------------------------------------
+    @app.get("/api/domain-pool")
+    def api_domain_pool():
+        status = request.args.get("status") or None
+        limit = request.args.get("limit", default=500, type=int)
+        return jsonify(db.list_domain_email_pool(status=status, limit=limit))
+
+    @app.post("/api/domain-pool/status")
+    def api_domain_pool_status():
+        data = request.get_json(silent=True) or {}
+        email = (data.get("email") or "").strip()
+        status = (data.get("status") or "").strip()
+        if not email or status not in ("available", "used", "failed"):
+            return jsonify({"ok": False, "error": "email 或 status 非法"}), 400
+        db.release_domain_email(email, status=status, note=data.get("note"))
+        return jsonify({"ok": True})
+
+    @app.post("/api/domain-pool/delete")
+    def api_domain_pool_delete():
+        data = request.get_json(silent=True) or {}
+        email = (data.get("email") or "").strip()
+        if not email:
+            return jsonify({"ok": False, "error": "email 为空"}), 400
+        deleted = db.delete_domain_email(email)
         return jsonify({"ok": True, "deleted": deleted})
 
     # ----------------------------------------------------------
@@ -342,11 +375,18 @@ def create_app() -> Flask:
                 pass
 
         # 提交前先确认池里有足够可用邮箱，给前端一个温和提示（不阻断）
-        pool = db.outlook_pool_summary()
+        from config import EMAIL_SOURCE
+        if EMAIL_SOURCE == "cloudflare_domain":
+            pool = db.domain_email_pool_summary()
+            warning = ""
+            if pool.get("available", 0) < count:
+                warning = f"域名邮箱池仅 {pool.get('available', 0)} 个可用，少于任务数 {count}，不足的会自动生成"
+        else:
+            pool = db.outlook_pool_summary()
+            warning = ""
+            if pool.get("available", 0) < count:
+                warning = f"可用邮箱仅 {pool.get('available', 0)} 个，少于任务数 {count}，不足的会失败"
         jobs = svc.submit_registration(count=count)
-        warning = ""
-        if pool.get("available", 0) < count:
-            warning = f"可用邮箱仅 {pool.get('available', 0)} 个，少于任务数 {count}，不足的会失败"
         return jsonify({"ok": True, "submitted": len(jobs), "jobs": jobs, "warning": warning})
 
     @app.post("/api/jobs/cancel-pending")

@@ -381,24 +381,33 @@ def run_registration(
         account_dead = isinstance(e, AccountUnusableError)
         try:
             from config import EMAIL_SOURCE as _src
-            if _src == "outlook" and email:
-                from core.outlook_client import release_account
-                if account_dead:
-                    release_account(
-                        email,
-                        status="failed",
-                        note=f"账号已废弃，邮箱不可用: {str(e)[:180]}",
-                    )
-                    logger.warning(f"[邮箱] {email} 账号已废弃，标记为 failed，不再重新注册")
-                elif create_acknowledged:
-                    release_account(
-                        email,
-                        status="failed",
-                        note=f"创建接口已通过但后续失败，已废弃: {str(e)[:180]}",
-                    )
-                    logger.warning(f"[邮箱] {email} 已创建但后续失败，标记为 failed，不再重新注册")
-                else:
-                    release_account(email, status="available", note=f"上次失败: {str(e)[:180]}")
+            if email:
+                if _src == "outlook":
+                    from core.outlook_client import release_account
+                    if account_dead:
+                        release_account(
+                            email, status="failed",
+                            note=f"账号已废弃，邮箱不可用: {str(e)[:180]}",
+                        )
+                        logger.warning(f"[邮箱] {email} 账号已废弃，标记为 failed，不再重新注册")
+                    elif create_acknowledged:
+                        release_account(
+                            email, status="failed",
+                            note=f"创建接口已通过但后续失败，已废弃: {str(e)[:180]}",
+                        )
+                        logger.warning(f"[邮箱] {email} 已创建但后续失败，标记为 failed，不再重新注册")
+                    else:
+                        release_account(email, status="available", note=f"上次失败: {str(e)[:180]}")
+                elif _src == "cloudflare_domain":
+                    from core.qqmail_client import release_domain_email
+                    if account_dead or create_acknowledged:
+                        release_domain_email(
+                            email, status="failed",
+                            note=f"{'账号已废弃' if account_dead else '已创建但后续失败'}: {str(e)[:180]}",
+                        )
+                        logger.warning(f"[域名邮箱] {email} 标记为 failed")
+                    else:
+                        release_domain_email(email, status="available", note=f"上次失败: {str(e)[:180]}")
         except Exception:
             pass
         return {"success": False, "email": email, "error": str(e)}

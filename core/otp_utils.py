@@ -108,8 +108,10 @@ def extract_otp(item: dict) -> str | None:
     for kind, body in candidates:
         if not body:
             continue
-        if kind == "html":
-            body = re.sub(r"<[^>]+>", " ", body)
+        # 无论 text 还是 html，都先去 HTML 标签和 style 属性
+        # （QQ 邮箱转发的 OpenAI 邮件，text 字段也可能含 HTML）
+        body = re.sub(r"<style[^>]*>.*?</style>", " ", body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r"<[^>]+>", " ", body)
         all_codes = _OTP_REGEX.findall(body)
         if not all_codes:
             continue

@@ -59,6 +59,11 @@ from config.email import (
     OTP_POLL_INTERVAL,
     OTP_MAX_WAIT,
     OTP_SETTLE_SECONDS,
+    EMAIL_DOMAIN,
+    QQ_IMAP_SERVER,
+    QQ_IMAP_PORT,
+    QQ_EMAIL,
+    QQ_IMAP_PASSWORD,
 )
 
 # ---------- 2FA ----------
@@ -130,6 +135,7 @@ __all__ = [
     "USE_EMAIL_SERVICE", "EMAIL_SOURCE",
     "OUTLOOK_ACCOUNTS_FILE", "OUTLOOK_API_BASE",
     "OTP_POLL_INTERVAL", "OTP_MAX_WAIT", "OTP_SETTLE_SECONDS",
+    "EMAIL_DOMAIN", "QQ_IMAP_SERVER", "QQ_IMAP_PORT", "QQ_EMAIL", "QQ_IMAP_PASSWORD",
     # twofa
     "ENABLE_2FA",
 ]
