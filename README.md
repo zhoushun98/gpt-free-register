@@ -24,7 +24,7 @@
 - 一个能稳定访问 `chatgpt.com` / `auth.openai.com` 的代理（本机 Clash / 商业代理皆可）
 - **Outlook 邮箱池**素材（外购模式使用，自购，4 段格式 `email----password----clientId----refreshToken`）
 - **QQ 邮箱**（可选，域名邮箱模式使用，需开启 IMAP 并生成授权码）
-- **GrizzlySMS API key**（如需 Codex 自动授权，约 $0.13/号）
+- **GrizzlySMS API key**（如需 Codex 自动授权，约 $0.06/号）
 
 ## 🚀 安装与启动
 
@@ -126,7 +126,7 @@ WebUI 有 5 个 Tab：
 python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
 ```
 
-会消耗一封邮箱 OTP + 一个接码短信（约 $0.13）。
+会消耗一封邮箱 OTP + 一个接码短信（约 $0.06）。
 
 ## ⚙️ 配置项
 
