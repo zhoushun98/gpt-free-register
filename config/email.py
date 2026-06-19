@@ -15,7 +15,7 @@ USE_EMAIL_SERVICE = True
 # 可选值：
 #   "outlook"           — 外购 Outlook 账号池 + mail.chatai.codes 远端取信
 #   "cloudflare_domain" — Cloudflare 域名邮箱（转发到 QQ 邮箱），通过 IMAP 取信
-EMAIL_SOURCE = "cloudflare_domain"
+EMAIL_SOURCE = "outlook"
 
 
 # ============================================================
@@ -45,7 +45,7 @@ OTP_SETTLE_SECONDS = 5
 
 # 你的 Cloudflare 域名，如 "mydomain.com"
 # 注册时会自动生成 random@mydomain.com 作为注册邮箱
-EMAIL_DOMAIN = "shenxiaobao.site"
+EMAIL_DOMAIN = ""
 
 # QQ 邮箱 IMAP 服务器地址（固定为 imap.qq.com）
 QQ_IMAP_SERVER = "imap.qq.com"
@@ -54,8 +54,8 @@ QQ_IMAP_SERVER = "imap.qq.com"
 QQ_IMAP_PORT = 993
 
 # QQ 邮箱地址（接收 Cloudflare 转发的邮件），如 "123456@qq.com"
-QQ_EMAIL = "1598289826@qq.com"
+QQ_EMAIL = ""
 
 # QQ 邮箱 IMAP 授权码（在 QQ 邮箱网页版 → 设置 → 账户 → POP3/IMAP/SMTP 服务 中生成）
 # 注意：这是 16 位授权码，不是 QQ 密码
-QQ_IMAP_PASSWORD = "mlmsspmkaltefhea"
+QQ_IMAP_PASSWORD = ""

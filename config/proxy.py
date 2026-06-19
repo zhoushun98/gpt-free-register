@@ -15,7 +15,12 @@ import random
 # Cliproxy 新加坡节点。未带 sid 的地址由服务端自行轮换，带 sid 的地址用于并发时分散会话。
 # 统一用 socks5h://（DNS 在代理端解析），避免本地 DNS 错配导致 TLS WRONG_VERSION_NUMBER。
 PROXY_POOL = [
-    "http://127.0.0.1:7897",
+    # 格式：socks5h://user:pass@host:port
+    # 或   http://user:pass@host:port
+    # 填入你的代理地址，每次注册随机抽取一个
+    # 示例：
+    # "socks5h://user:pass@proxy.example.com:1080",
+    # "http://127.0.0.1:7897",
 ]
 
 

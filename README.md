@@ -10,7 +10,7 @@
 
 - **协议层注册**：providers → CSRF → OAuth signin → email-verification → create-account → OAuth 回调，全程纯 HTTP
 - **Sentinel/PoW**：自动调用 Node.js 跑 OpenAI sentinel SDK 生成 turnstile + PoW token
-- **Outlook 邮箱池**：自动领取邮箱、双协议（Graph + IMAP）取 OTP
+- **双邮箱源**：支持外购 Outlook 邮箱池（Graph + IMAP 双协议取件）或 **Cloudflare 域名邮箱 + QQ 邮箱 IMAP 取信**，通过 `EMAIL_SOURCE` 切换
 - **2FA(TOTP)**：可选，注册成功后自动 enroll TOTP 并落 base32 secret
 - **Codex OAuth 自动授权**：注册成功后用全新干净 session 走 phone-verification → consent → 拿 code → 换 token → 落 [CPA](https://github.com/router-for-me/CLIProxyAPI) 兼容的 `codex-邮箱.json`
 - **接码自动化**：手机验证关卡接入 [GrizzlySMS](https://grizzlysms.com)，自动取号、收码、换号重试
@@ -22,7 +22,8 @@
 - **Python** 3.10+
 - **Node.js** 18+（用于跑 OpenAI sentinel SDK；`sentinel-runner.js` 在 vm 沙箱里执行真实 sdk.js）
 - 一个能稳定访问 `chatgpt.com` / `auth.openai.com` 的代理（本机 Clash / 商业代理皆可）
-- **Outlook 邮箱池**素材（自购，4 段格式 `email----password----clientId----refreshToken`）
+- **Outlook 邮箱池**素材（外购模式使用，自购，4 段格式 `email----password----clientId----refreshToken`）
+- **QQ 邮箱**（可选，域名邮箱模式使用，需开启 IMAP 并生成授权码）
 - **GrizzlySMS API key**（如需 Codex 自动授权，约 $0.13/号）
 
 ## 🚀 安装与启动
@@ -38,9 +39,19 @@ pip install -r requirements.txt
 # 3. 验证 Node.js 可用（sentinel runner 需要）
 node --version
 
-# 4. 准备邮箱池
-cp 用于注册的邮箱.txt.example 用于注册的邮箱.txt
-# 编辑这个文件，填入真实 Outlook 账号（每行 4 段 ---- 分隔）
+# 4. 准备邮箱源
+
+   **方式 A — Outlook 邮箱池**：
+   ```bash
+   cp 用于注册的邮箱.txt.example 用于注册的邮箱.txt
+   # 编辑这个文件，填入真实 Outlook 账号（每行 4 段 ---- 分隔）
+   ```
+
+   **方式 B — Cloudflare 域名邮箱**：
+   - 在 Cloudflare 控制台配置 Email Routing，将域名所有邮件转发到你的 QQ 邮箱
+   - 在 QQ 邮箱网页版 → 设置 → 账户 → 开启 IMAP/SMTP 服务，生成授权码
+   - 编辑 `config/email.py`，设置 `EMAIL_SOURCE = "cloudflare_domain"`，填入域名、QQ 邮箱和 IMAP 授权码
+   - 域名邮箱无需准备邮箱素材，注册时自动生成随机地址
 
 # 5. 配置代理（如有需要）
 # 编辑 config/proxy.py 的 PROXY_POOL，写入你的代理地址
@@ -119,12 +130,12 @@ python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
 
 ## ⚙️ 配置项
 
-所有配置在 `config/` 目录下，按主题分文件。**WebUI 配置 Tab 暴露的 14 项支持热加载**（保存即生效），其它需重启进程：
+所有配置在 `config/` 目录下，按主题分文件。**WebUI 配置 Tab 暴露的关键项支持热加载**（保存即生效），其它需重启进程：
 
 | 文件 | 内容 | WebUI 可改 |
 |---|---|---|
 | `config/codex.py` | Codex OAuth + 接码（GrizzlySMS） | ✅ ENABLE_CODEX_AUTO / SMS_COUNTRY / SMS_SERVICE / SMS_API_KEY / SMS_MAX_RETRIES / SMS_CODE_WAIT |
-| `config/email.py` | Outlook 邮箱池 + OTP 轮询 | ✅ USE_EMAIL_SERVICE / OTP_MAX_WAIT / OTP_POLL_INTERVAL |
+| `config/email.py` | Outlook 邮箱池 / 域名邮箱 + OTP 轮询 | ✅ EMAIL_SOURCE / USE_EMAIL_SERVICE / OTP_MAX_WAIT / OTP_POLL_INTERVAL / QQ_EMAIL / QQ_IMAP_PASSWORD / EMAIL_DOMAIN |
 | `config/twofa.py` | 2FA 开关 | ✅ ENABLE_2FA |
 | `config/flow_trigger.py` | 注册成功后触发自定义 Flow | ✅ ENABLE_FLOW_TRIGGER |
 | `config/register.py` | 注册默认信息 | ✅ REGISTER_BIRTHDAY |
@@ -139,6 +150,7 @@ python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
 | 文件/目录 | 内容 |
 |---|---|
 | `用于注册的邮箱.{json,txt}` | Outlook 邮箱池（含密码/clientId/refreshToken），运行时状态机 |
+| `用于注册的域名邮箱.json` | Cloudflare 域名邮箱池（运行时数据） |
 | `注册成功的邮箱.{json,txt}` | 已注册账号列表 |
 | `注册成功的token.txt` | 每行一个 accessToken |
 | `accounts/` | 历史批次归档目录（按日期命名） |
@@ -165,8 +177,9 @@ python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
 │   ├── openai_auth.py     #   步骤 4-12（authorize 链 / OTP / 创建账号）
 │   ├── sentinel.py        #   Sentinel token 生成
 │   ├── sentinel_runner.py #   通过 subprocess 调 Node 跑 sdk.js
-│   ├── email_provider.py  #   邮箱调度（封装 outlook_client）
+│   ├── email_provider.py  #   邮箱调度（根据 EMAIL_SOURCE 分发）
 │   ├── outlook_client.py  #   Outlook 双协议取件
+│   ├── qqmail_client.py   #   QQ 邮箱 IMAP 客户端（域名邮箱模式）
 │   ├── codex_oauth.py     #   Codex OAuth 全流程
 │   ├── sms_provider.py    #   GrizzlySMS 接码客户端
 │   ├── account_export.py  #   注册后处理：取 token / 设 2FA / 落盘
@@ -196,7 +209,7 @@ python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
    ▼
 [9]   sentinel token (authorize_continue, 带 PoW)
    ▼
-[10]  validate email OTP            ─── 从 Outlook 取件
+[10]  validate email OTP            ─── Outlook 取件 / QQ IMAP 取信
    ▼
 [11]  sentinel token (oauth_create_account)
    ▼
@@ -220,7 +233,7 @@ python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
 ## 🛡️ 安全 & 责任声明
 
 - **本工具仅供学习交流**。批量注册可能违反 OpenAI 服务条款，请自行评估风险
-- **不要把 `用于注册的邮箱.txt`、`注册成功的*.txt`、`codex_accounts/` 推到公开仓库**，`.gitignore` 已默认屏蔽，clone 后请勿手动 `git add -f` 这些文件
+- **不要把 `用于注册的邮箱.txt`、`用于注册的域名邮箱.json`、`注册成功的*.txt`、`codex_accounts/` 推到公开仓库**，`.gitignore` 已默认屏蔽，clone 后请勿手动 `git add -f` 这些文件
 - **API key 别硬编码**。`config/codex.py` 的 `SMS_API_KEY` 默认为空，请运行时填或通过 WebUI 改
 - **WebUI 默认只绑 127.0.0.1**。如要 `--host 0.0.0.0` 暴露到局域网，请确认网络可信
 - 注册产生的 access token 是敏感凭证，等同于该账号的密码，妥善保管
@@ -233,7 +246,8 @@ A: 代理抖动 / TLS 握手失败。检查代理是否正常（特别是 Clash 
 **Q: 验证码收到了，但提交时返回 `account_deactivated`**
 A: 这个邮箱对应的 ChatGPT 账号已被 OpenAI 删除/停用，邮箱本身废了。新代码会**自动**把这个邮箱标记为 `failed`，不再重试。换批新邮箱即可。
 
-**Q: 我没有接码平台，能用吗**
+**Q: 我没有 Outlook 邮箱池，能用吗**
+A: 可以。使用 **Cloudflare 域名邮箱模式**（`EMAIL_SOURCE = "cloudflare_domain"`），只需要一个自己的域名 + 一个 QQ 邮箱。配置好 Cloudflare Email Routing 后，注册时自动生成 `random@你的域名` 地址，验证码通过 QQ 邮箱 IMAP 接收。无需外购 Outlook 素材。
 A: 能。注册主流程**不依赖接码**，只有 Codex OAuth 自动授权那步要。把 `config/codex.py` 里 `ENABLE_CODEX_AUTO = False`，注册照常跑，只是不会自动产出 Codex 凭证。
 
 **Q: Codex 授权失败，但账号本身注册成功了**
