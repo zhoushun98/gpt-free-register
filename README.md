@@ -33,8 +33,9 @@
 git clone <your-repo-url>
 cd GPT协议注册-0419
 
-# 2. 安装 Python 依赖
-pip install -r requirements.txt
+# 2. 安装 Python 3.12 并同步依赖
+uv python install 3.12
+uv sync
 
 # 3. 验证 Node.js 可用（sentinel runner 需要）
 node --version
@@ -64,16 +65,16 @@ node --version
 
 ```bash
 # 注册 1 个号（默认）
-python main.py
+uv run python main.py
 
 # 批量注册 10 个，3 线程并发，单个失败继续
-python main.py -n 10 --workers 3 --continue-on-fail
+uv run python main.py -n 10 --workers 3 --continue-on-fail
 
 # 显示详细日志
-python main.py -n 1 --verbose
+uv run python main.py -n 1 --verbose
 
 # 指定每次注册之间间隔
-python main.py -n 5 --delay 3
+uv run python main.py -n 5 --delay 3
 ```
 
 完整参数：
@@ -89,14 +90,14 @@ python main.py -n 5 --delay 3
 ## ▶️ 使用方式 2：WebUI 控制台
 
 ```bash
-python web.py
+uv run python web.py
 # 自动打开浏览器到 http://127.0.0.1:5000
 # 默认只绑定本地，安全
 
 # 换端口
-python web.py --port 8000
+uv run python web.py --port 8000
 # 允许局域网访问（敏感工具，请确认网络可信）
-python web.py --host 0.0.0.0
+uv run python web.py --host 0.0.0.0
 ```
 
 WebUI 有 5 个 Tab：
@@ -123,7 +124,7 @@ WebUI 有 5 个 Tab：
 如果一个号注册时 Codex 那步失败了，可以单独补跑（不需要重新注册）：
 
 ```bash
-python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
+uv run python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
 ```
 
 会消耗一封邮箱 OTP + 一个接码短信（约 $0.06）。
@@ -253,10 +254,10 @@ A: 可以。使用 **Cloudflare 域名邮箱模式**（`EMAIL_SOURCE = "cloudfla
 A: 能。注册主流程**不依赖接码**，只有 Codex OAuth 自动授权那步要。把 `config/codex.py` 里 `ENABLE_CODEX_AUTO = False`，注册照常跑，只是不会自动产出 Codex 凭证。
 
 **Q: Codex 授权失败，但账号本身注册成功了**
-A: 主流程把 Codex 当成"成功后的额外步骤"，它失败**不影响**账号注册结果。可以单独用 `python tools/test_codex_oauth.py --email <邮箱>` 补跑。
+A: 主流程把 Codex 当成"成功后的额外步骤"，它失败**不影响**账号注册结果。可以单独用 `uv run python tools/test_codex_oauth.py --email <邮箱>` 补跑。
 
 **Q: 配置改了没生效**
-A: WebUI 配置 Tab 暴露的 14 项支持热加载（保存后 banner 显示"立即生效"）。如果你直接改 `.py` 文件，则需要重启 `python web.py` / 重启 CLI 进程。
+A: WebUI 配置 Tab 暴露的 14 项支持热加载（保存后 banner 显示"立即生效"）。如果你直接改 `.py` 文件，则需要重启 `uv run python web.py` / 重启 CLI 进程。
 
 **Q: 多线程并发是怎么实现的**
 A: 每个线程一个 `BrowserSession` + 一个代理（从 PROXY_POOL 随机抽），邮箱池用 `threading.RLock` + 原子领取保证不冲突。建议 workers ≤ 代理池大小，避免同代理多线程被风控关联。

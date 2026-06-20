@@ -3,11 +3,11 @@
 WebUI 启动入口。
 
 用法：
-    python web.py                 # 默认 http://127.0.0.1:5000，仅本地访问
-    python web.py --port 8000     # 换端口
-    python web.py --host 0.0.0.0  # 允许局域网访问（敏感工具，自行评估）
+    uv run python web.py                 # 默认 http://127.0.0.1:5000，仅本地访问
+    uv run python web.py --port 8000     # 换端口
+    uv run python web.py --host 0.0.0.0  # 允许局域网访问（敏感工具，自行评估）
 
-与 CLI（python main.py）完全平行，互不影响。
+与 CLI（uv run python main.py）完全平行，互不影响。
 """
 import argparse
 import logging
